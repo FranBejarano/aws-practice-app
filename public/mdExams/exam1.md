@@ -1,4 +1,4 @@
-export const exam1Data = `# Practice Exam 1
+# Practice Exam 1
 
 1. AWS allows users to manage their resources using a web based user interface. What is the name of this interface?
     - A. AWS CLI.
@@ -410,4 +410,4 @@ export const exam1Data = `# Practice Exam 1
     - C. Standard RI.
     - D. Convertible RI.
 
-      Correct answer: D`
+      Correct answer: D

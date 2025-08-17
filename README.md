@@ -67,3 +67,18 @@ export default tseslint.config([
   },
 ])
 ```
+
+## 📝 Working with Exams
+
+All practice exams are stored as Markdown files in:
+
+```
+public
+```
+### Converting `.md` exams into `.json`
+
+Run the parser script:
+
+```bash
+npx tsx scripts/parse-exams.ts
+```

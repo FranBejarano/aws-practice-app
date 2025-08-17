@@ -1,91 +1,95 @@
-// src/scripts/parseMarkdownToJson.ts
 import fs from "fs";
 import path from "path";
-import OpenAI from "openai";
-import 'dotenv/config';
+import { fileURLToPath } from "url";
 
-// Check for API key early with a clear error
-if (!process.env.OPENAI_API_KEY) {
-  console.error(`
-❌ ERROR: Missing OpenAI API key.
-
-Please create a file named ".env" in your project root with:
-OPENAI_API_KEY=sk-your-key-here
-
-Or set the environment variable manually before running:
-  Linux/Mac: OPENAI_API_KEY=sk-your-key npx tsx scripts/parse-markdown.ts
-  Windows PowerShell: $env:OPENAI_API_KEY="sk-your-key"; npx tsx scripts/parse-markdown.ts
-`);
-  process.exit(1);
+interface Question {
+  id: number;
+  question: string;
+  options: { letter: string; text: string }[];
+  correct: string[];
+  type: "single" | "multiple";
 }
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-const mdFolder = path.join(__dirname, "../questions-md");
-const outputFile = path.join(__dirname, "../questions.json");
-
-async function generateExplanation(question: string, options: string[], correct: string) {
-  const prompt = `
-You are an AWS certification trainer. Given the following question and answer options, 
-explain why the correct answer(s) is right and why the other options are wrong. 
-Write in an educational but concise tone.
-
-Question:
-${question}
-
-Options:
-${options.map(o => `- ${o}`).join("\n")}
-
-Correct answer(s): ${correct}
-
-Format the output EXACTLY as:
-"Correct answer: ${correct}. <Your explanation here>"
-`;
-
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.5
-  });
-
-  return completion.choices[0].message.content?.trim() || "";
+interface Exam {
+  examTitle: string;
+  questions: Question[];
 }
 
-async function parseMarkdown() {
-  const files = fs.readdirSync(mdFolder).filter(f => f.endsWith(".md"));
-  let allQuestions: any[] = [];
+// Parse options line like "- A. Option text"
+function parseOption(line: string) {
+  const match = line.match(/^-?\s*([A-Z])\.\s*(.*)/);
+  return match ? { letter: match[1], text: match[2] } : null;
+}
 
-  for (const file of files) {
-    const content = fs.readFileSync(path.join(mdFolder, file), "utf-8");
-    const questionBlocks = content.split(/\n(?=\d+\.\s)/g);
+// Parse a single markdown exam
+function parseExam(content: string): Exam {
+  const lines = content.split("\n");
+  const examTitle = lines[0].replace(/^#\s*/, "").trim();
+  const questions: Question[] = [];
 
-    for (const block of questionBlocks) {
-      const questionMatch = block.match(/^\d+\.\s(.+?)\n\s+-/s);
-      if (!questionMatch) continue;
+  let current: Partial<Question> = {};
+  let options: { letter: string; text: string }[] = [];
 
-      const questionText = questionMatch[1].trim();
+  for (const lineRaw of lines.slice(1)) {
+    const line = lineRaw.trim();
+    const qMatch = line.match(/^(\d+)\.\s+(.*)/);
 
-      const optionMatches = [...block.matchAll(/-\s([A-E])\.\s(.+)/g)];
-      const options = optionMatches.map(m => `${m[1]}. ${m[2].trim()}`);
+    if (qMatch) {
+      if (current.question) {
+        current.options = options;
+        current.type = (current.correct?.length ?? 0) > 1 ? "multiple" : "single";
+        questions.push(current as Question);
+      }
+      current = { id: parseInt(qMatch[1]), question: qMatch[2].trim(), correct: [] };
+      options = [];
+      continue;
+    }
 
-      const correctMatch = block.match(/Correct answer:\s*(.+)/i);
-      if (!correctMatch) continue;
+    const option = parseOption(line);
+    if (option) {
+      options.push(option);
+      continue;
+    }
 
-      const correctAnswer = correctMatch[1].trim();
-
-      const explanation = await generateExplanation(questionText, options, correctAnswer);
-
-      allQuestions.push({
-        question: questionText,
-        options,
-        correct: correctAnswer,
-        explanation
-      });
+    if (/^Correct answer:/i.test(line)) {
+      current.correct = line.replace(/^Correct answer:\s*/i, "").split(",").map(s => s.trim());
     }
   }
 
-  fs.writeFileSync(outputFile, JSON.stringify(allQuestions, null, 2), "utf-8");
-  console.log(`✅ Parsed ${allQuestions.length} questions. Saved to ${outputFile}`);
+  if (current.question) {
+    current.options = options;
+    current.type = (current.correct?.length ?? 0) > 1 ? "multiple" : "single";
+    questions.push(current as Question);
+  }
+
+  return { examTitle, questions };
 }
 
-parseMarkdown().catch(err => console.error(err));
+// Main function
+function main() {
+  const inputDir = path.join(fileURLToPath(new URL("../public/mdExams", import.meta.url)));
+  const outputDir = path.join(fileURLToPath(new URL("../public/jsonExams", import.meta.url)));
+
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+  const manifest: { file: string; title: string; questionCount: number }[] = [];
+
+  fs.readdirSync(inputDir)
+    .filter(f => f.endsWith(".md"))
+    .forEach(file => {
+      const content = fs.readFileSync(path.join(inputDir, file), "utf-8");
+      const exam = parseExam(content);
+
+      const outFile = file.replace(/\.md$/, ".json");
+      fs.writeFileSync(path.join(outputDir, outFile), JSON.stringify(exam, null, 2));
+
+      console.log(`✅ Parsed ${file}`);
+      manifest.push({ file: outFile, title: exam.examTitle, questionCount: exam.questions.length });
+    });
+
+  // Write manifest.json for React app
+  fs.writeFileSync(path.join(outputDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+  console.log(`📄 Created manifest with ${manifest.length} exams`);
+}
+
+main();
